@@ -15,24 +15,24 @@
  */
 package feign.jaxrs;
 
+import java.beans.*;
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Collection;
+import java.lang.reflect.Parameter;
+import java.lang.reflect.Type;
+import java.util.*;
 
-import javax.ws.rs.Consumes;
-import javax.ws.rs.FormParam;
-import javax.ws.rs.HeaderParam;
-import javax.ws.rs.HttpMethod;
-import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
-import javax.ws.rs.Produces;
-import javax.ws.rs.QueryParam;
+import javax.ws.rs.*;
 
 import feign.Contract;
+import feign.FeignException;
 import feign.MethodMetadata;
+import feign.Param;
 
-import static feign.Util.checkState;
-import static feign.Util.emptyToNull;
+import static feign.Util.*;
+import static feign.jaxrs.ReflectionUtil.getAllDeclaredFields;
+import static java.lang.String.format;
 
 /**
  * Please refer to the <a href="https://github.com/Netflix/feign/tree/master/feign-jaxrs">Feign
@@ -47,7 +47,11 @@ public final class JAXRSContract extends Contract.BaseContract {
   // XXX: Should parseAndValidateMetadata(Class, Method) be public instead? The old deprecated parseAndValidateMetadata(Method) was public..
   @Override
   protected MethodMetadata parseAndValidateMetadata(Class<?> targetType, Method method) {
-    return super.parseAndValidateMetadata(targetType, method);
+    MethodMetadata data = super.parseAndValidateMetadata(targetType, method);
+
+    parseAndValidateBeanParams(data, method);
+
+    return data;
   }
 
   @Override
@@ -121,42 +125,137 @@ public final class JAXRSContract extends Contract.BaseContract {
   }
 
   @Override
-  protected boolean processAnnotationsOnParameter(MethodMetadata data, Annotation[] annotations,
-                                                  int paramIndex) {
-    boolean isHttpParam = false;
+  protected boolean processAnnotationsOnParameter(MethodMetadata data, Annotation[] annotations, int paramIndex) {
+    if(processAnnotations(data, annotations, paramIndex) != null)
+      return true;
+
+    for(int i=0; i<annotations.length; i++) {
+      if (BeanParam.class.isAssignableFrom(annotations[i].getClass())) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  protected String processAnnotations(MethodMetadata data, Annotation[] annotations, int paramIndex) {
     for (Annotation parameterAnnotation : annotations) {
       Class<? extends Annotation> annotationType = parameterAnnotation.annotationType();
       if (annotationType == PathParam.class) {
         String name = PathParam.class.cast(parameterAnnotation).value();
         checkState(emptyToNull(name) != null, "PathParam.value() was empty on parameter %s",
-                   paramIndex);
+          paramIndex);
         nameParam(data, name, paramIndex);
-        isHttpParam = true;
+        return name;
       } else if (annotationType == QueryParam.class) {
         String name = QueryParam.class.cast(parameterAnnotation).value();
         checkState(emptyToNull(name) != null, "QueryParam.value() was empty on parameter %s",
-                   paramIndex);
+          paramIndex);
         Collection<String> query = addTemplatedParam(data.template().queries().get(name), name);
         data.template().query(name, query);
         nameParam(data, name, paramIndex);
-        isHttpParam = true;
+        return name;
       } else if (annotationType == HeaderParam.class) {
         String name = HeaderParam.class.cast(parameterAnnotation).value();
         checkState(emptyToNull(name) != null, "HeaderParam.value() was empty on parameter %s",
-                   paramIndex);
+          paramIndex);
         Collection<String> header = addTemplatedParam(data.template().headers().get(name), name);
         data.template().header(name, header);
         nameParam(data, name, paramIndex);
-        isHttpParam = true;
+        return name;
       } else if (annotationType == FormParam.class) {
         String name = FormParam.class.cast(parameterAnnotation).value();
         checkState(emptyToNull(name) != null, "FormParam.value() was empty on parameter %s",
-                   paramIndex);
+          paramIndex);
         data.formParams().add(name);
         nameParam(data, name, paramIndex);
-        isHttpParam = true;
+        return name;
       }
     }
-    return isHttpParam;
+    return null;
+  }
+
+  protected void parseAndValidateBeanParams(MethodMetadata data, Method method) {
+    Type[] types = method.getParameterTypes();
+    Annotation[][] annotations = method.getParameterAnnotations();
+    for(int i=0; i<types.length; i++) {
+      boolean annotated = false;
+      Annotation[] paramAnnotations = annotations[i];
+      for(int j=0; j<paramAnnotations.length; j++) {
+        if(BeanParam.class.isAssignableFrom(paramAnnotations[j].getClass())) {
+          for(int k=0;k<annotations[i].length; k++) {
+            if(Param.class.isAssignableFrom(paramAnnotations[k].getClass())) {
+              throw new IllegalStateException("@BeanParam annotated fields cannot be annotated with @Param");
+            }
+          }
+          annotated = true;
+          break;
+        }
+      }
+      if(annotated)
+        processAnnotationsOnBeanParam(data, types[i], i);
+    }
+  }
+
+  protected void processAnnotationsOnBeanParam(MethodMetadata data, Type beanClass, int paramIndex) {
+    try {
+      List<BeanParamPropertyMetadata> propertyMetas = new ArrayList<BeanParamPropertyMetadata>();
+
+      // Find annotated write methods and their respective reads
+      Map<String, PropertyDescriptor> descriptorsByName = new HashMap<String, PropertyDescriptor>();
+      BeanInfo info = Introspector.getBeanInfo((Class<?>) beanClass);
+      for(PropertyDescriptor prop: info.getPropertyDescriptors()) {
+        if(prop.getReadMethod() != null && prop.getWriteMethod() != null) {
+          String name = processAnnotations(data, prop.getWriteMethod().getAnnotations(), paramIndex);
+          if(name != null) {
+            propertyMetas.add(new BeanParamPropertyMetadata(name, null, prop.getReadMethod()));
+          }
+        }
+        descriptorsByName.put(prop.getName(), prop);
+      }
+
+      // Find annotated fields, prefer getter access but use field in none is found
+      for (Field field : getAllDeclaredFields((Class<?>) beanClass, true)) {
+        String fieldName = field.getName();
+        if(descriptorsByName.containsKey(fieldName)) {
+          PropertyDescriptor descriptor = descriptorsByName.get(fieldName);
+          String name = processAnnotations(data, field.getAnnotations(), paramIndex);
+          if(descriptor.getReadMethod() != null && name != null) {
+            propertyMetas.add(new BeanParamPropertyMetadata(name, null, descriptor.getReadMethod()));
+            continue;
+          }
+        }
+
+        String name = processAnnotations(data, field.getAnnotations(), paramIndex);
+        if(name != null)
+          propertyMetas.add(new BeanParamPropertyMetadata(name, field, null));
+      }
+
+      String[] names = new String[propertyMetas.size()];
+      Method[] getters  = new Method[propertyMetas.size()];
+      Field[] fields = new Field[propertyMetas.size()];
+      for(int i=0; i<propertyMetas.size(); i++) {
+        BeanParamPropertyMetadata propertyMetadata = propertyMetas.get(i);
+        fields[i] = propertyMetadata.property;
+        getters[i] = propertyMetadata.getter;
+        names[i] = propertyMetadata.name;
+      }
+      data.parameterMetadata(paramIndex).transformer(new BeanParamTransformer(names, fields, getters));
+
+    } catch(IntrospectionException e) {
+      throw new RuntimeException(format("Unable to build bean info for %s", beanClass), e);
+    }
+  }
+
+  protected static class BeanParamPropertyMetadata {
+    final String name;
+    final Field  property;
+    final Method getter;
+
+    public BeanParamPropertyMetadata(String name, Field property, Method getter) {
+      this.name = name;
+      this.property = property;
+      this.getter = getter;
+    }
   }
 }

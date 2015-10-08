@@ -17,13 +17,13 @@ package feign;
 
 import java.io.Serializable;
 import java.lang.reflect.Type;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import feign.Param.Expander;
+
+import static feign.Util.checkArgument;
+import static feign.Util.checkState;
+import static java.lang.String.format;
 
 public final class MethodMetadata implements Serializable {
 
@@ -40,7 +40,13 @@ public final class MethodMetadata implements Serializable {
   private Map<Integer, Class<? extends Expander>> indexToExpanderClass =
       new LinkedHashMap<Integer, Class<? extends Expander>>();
 
-  MethodMetadata() {
+  private final ParameterMetadata[] parameterMetadata;
+
+  MethodMetadata(int parameterCount) {
+    parameterMetadata = new ParameterMetadata[parameterCount];
+    for(int i=0; i<parameterCount; i++) {
+      parameterMetadata[i] = new ParameterMetadata();
+    }
   }
 
   /**
@@ -108,5 +114,36 @@ public final class MethodMetadata implements Serializable {
 
   public Map<Integer, Class<? extends Expander>> indexToExpanderClass() {
     return indexToExpanderClass;
+  }
+
+  public ParameterMetadata parameterMetadata(int index) {
+    checkArgument(index < parameterMetadata.length, format("invalid parameter index %d", index));
+    return parameterMetadata[index];
+  }
+
+  public interface ParameterTransformer {
+    Object transform(Object param);
+  }
+
+  /**
+   * In addition to transforming the value, implementers may produce multiple template parameters.
+   */
+  public interface NamingParameterTransformer extends ParameterTransformer {
+    @Override
+    Map<String, Object> transform(Object param);
+  }
+
+  public static class ParameterMetadata {
+    private ParameterTransformer transformer;
+
+    public ParameterMetadata transformer(ParameterTransformer transformer) {
+      checkState(transformer != null, "transformer already set");
+      this.transformer = transformer;
+      return this;
+    }
+
+    public ParameterTransformer transformer() {
+      return this.transformer;
+    }
   }
 }

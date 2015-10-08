@@ -78,7 +78,7 @@ public interface Contract {
      * Called indirectly by {@link #parseAndValidatateMetadata(Class)}.
      */
     protected MethodMetadata parseAndValidateMetadata(Class<?> targetType, Method method) {
-      MethodMetadata data = new MethodMetadata();
+      MethodMetadata data = new MethodMetadata(method.getParameterTypes().length);
       data.returnType(Types.resolve(targetType, targetType, method.getGenericReturnType()));
       data.configKey(Feign.configKey(targetType, method));
 

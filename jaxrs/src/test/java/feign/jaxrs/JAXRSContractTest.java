@@ -15,6 +15,7 @@
  */
 package feign.jaxrs;
 
+import org.assertj.core.api.Assertions;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
@@ -26,18 +27,7 @@ import java.lang.annotation.Target;
 import java.net.URI;
 import java.util.List;
 
-import javax.ws.rs.Consumes;
-import javax.ws.rs.DELETE;
-import javax.ws.rs.FormParam;
-import javax.ws.rs.GET;
-import javax.ws.rs.HeaderParam;
-import javax.ws.rs.HttpMethod;
-import javax.ws.rs.POST;
-import javax.ws.rs.PUT;
-import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
-import javax.ws.rs.Produces;
-import javax.ws.rs.QueryParam;
+import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 
 import feign.MethodMetadata;
@@ -110,9 +100,9 @@ public class JAXRSContractTest {
     assertThat(parseAndValidateMetadata(WithQueryParamsInPath.class, "empty").template())
         .hasUrl("/")
         .hasQueries(
-            entry("flag", asList(new String[]{null})),
-            entry("Action", asList("GetUser")),
-            entry("Version", asList("2010-05-08"))
+          entry("flag", asList(new String[]{null})),
+          entry("Action", asList("GetUser")),
+          entry("Version", asList("2010-05-08"))
         );
   }
 
@@ -122,8 +112,8 @@ public class JAXRSContractTest {
 
     assertThat(md.template())
         .hasHeaders(
-                entry("Content-Type", asList("application/json")),
-                entry("Accept", asList("application/xml")));
+          entry("Content-Type", asList("application/json")),
+          entry("Accept", asList("application/xml")));
   }
 
   @Test
@@ -214,7 +204,7 @@ public class JAXRSContractTest {
     thrown.expect(IllegalStateException.class);
     thrown.expectMessage("Path.value() was empty on method emptyPath");
 
-    parseAndValidateMetadata(PathOnType.class,"emptyPath");
+    parseAndValidateMetadata(PathOnType.class, "emptyPath");
   }
 
   @Test
@@ -249,9 +239,9 @@ public class JAXRSContractTest {
                                                  "uriParam", String.class, URI.class, String.class);
 
     assertThat(md.indexToName()).containsExactly(
-        entry(0, asList("1")),
-        // Skips 1 as it is a url index!
-        entry(2, asList("2")));
+      entry(0, asList("1")),
+      // Skips 1 as it is a url index!
+      entry(2, asList("2")));
 
     assertThat(md.urlIndex()).isEqualTo(1);
   }
@@ -266,8 +256,8 @@ public class JAXRSContractTest {
         .hasQueries(entry("name", asList("{name}")), entry("type", asList("{type}")));
 
     assertThat(md.indexToName()).containsExactly(entry(0, asList("domainId")),
-                                                 entry(1, asList("name")),
-                                                 entry(2, asList("type")));
+      entry(1, asList("name")),
+      entry(2, asList("type")));
   }
 
   @Test
@@ -287,9 +277,9 @@ public class JAXRSContractTest {
         .containsExactly("customer_name", "user_name", "password");
 
     assertThat(md.indexToName()).containsExactly(
-        entry(0, asList("customer_name")),
-        entry(1, asList("user_name")),
-        entry(2, asList("password"))
+      entry(0, asList("customer_name")),
+      entry(1, asList("user_name")),
+      entry(2, asList("password"))
     );
   }
 
@@ -359,6 +349,28 @@ public class JAXRSContractTest {
   public void classPathWithTrailingSlashParsesCorrectly() throws Exception {
       assertThat(parseAndValidateMetadata(ClassPathWithTrailingSlash.class, "get").template())
               .hasUrl("/base/specific");
+  }
+
+  @Test
+  public void beanParamMappedCorrectly() throws Exception {
+    MethodMetadata metadata = parseAndValidateMetadata(BeanParamResource.class, "create", BeanParamArgument.class);
+    assertThat(metadata.template().queries()).contains(
+      entry("paramA", asList("{paramA}")),
+      entry("paramB", asList("{paramB}")),
+      entry("paramC", asList("{paramC}"))
+    );
+
+    assertThat(metadata.bodyIndex()).isNull();
+
+    BeanParamTransformer transformer = (BeanParamTransformer) metadata.parameterMetadata(0).transformer();
+    assertThat(transformer).isNotNull();
+    assertThat(transformer.names).contains("paramA", "paramB", "paramC");
+
+    assertThat(transformer.transform(new BeanParamArgument("valueA", "valueB", "valueC"))).contains(
+      entry("paramA", "valueA"),
+      entry("paramB", "getter-valueB"),
+      entry("paramC", "getter-valueC")
+    );
   }
 
   interface Methods {
@@ -566,6 +578,46 @@ public class JAXRSContractTest {
       @GET
       @Path("/specific")
       Response get();
+  }
+
+  @Path("base")
+  interface BeanParamResource {
+    @GET @Path("{pathParam}") Response create(@BeanParam BeanParamArgument param);
+  }
+
+  class BeanParamArgument {
+    public BeanParamArgument(String queryParamA, String queryParamB, String queryParamC) {
+      this.queryParamA = queryParamA;
+      this.queryParamB = queryParamB;
+      this.queryParamC = queryParamC;
+    }
+
+    @QueryParam("paramA")
+    String queryParamA;
+
+    String queryParamB;
+
+    @QueryParam("paramC")
+    String queryParamC;
+
+    @FormParam("formParam")
+    String formParam;
+
+    @PathParam("pathParam")
+    String pathParam;
+
+    @QueryParam("paramB")
+    public void setQueryParamB(String queryParamB) {
+      this.queryParamB = queryParamB;
+    }
+
+    public String getQueryParamB() {
+      return "getter-" + queryParamB;
+    }
+
+    public String getQueryParamC() {
+      return "getter-" + queryParamC;
+    }
   }
 
   private MethodMetadata parseAndValidateMetadata(Class<?> targetType, String method,

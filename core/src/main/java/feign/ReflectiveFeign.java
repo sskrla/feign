@@ -18,13 +18,11 @@ package feign;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
-import java.util.Collection;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
 
 import feign.InvocationHandlerFactory.MethodHandler;
+import feign.MethodMetadata.NamingParameterTransformer;
 import feign.Param.Expander;
 import feign.Request.Options;
 import feign.codec.Decoder;
@@ -186,7 +184,20 @@ public class ReflectiveFeign extends Feign {
       Map<String, Object> varBuilder = new LinkedHashMap<String, Object>();
       for (Entry<Integer, Collection<String>> entry : metadata.indexToName().entrySet()) {
         int i = entry.getKey();
-        Object value = argv[entry.getKey()];
+        MethodMetadata.ParameterMetadata paramMeta = metadata.parameterMetadata(i);
+        MethodMetadata.ParameterTransformer transformer = paramMeta.transformer();
+
+        Object value = argv[i];
+        if(transformer != null) {
+          if (transformer instanceof NamingParameterTransformer) {
+            varBuilder.putAll(((NamingParameterTransformer) transformer).transform(value));
+            continue;
+
+          } else {
+            value = transformer.transform(value);
+          }
+        }
+
         if (value != null) { // Null values are skipped.
           if (indexToExpander.containsKey(i)) {
             value = indexToExpander.get(i).expand(value);
